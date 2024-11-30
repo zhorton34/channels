@@ -11,6 +11,11 @@ env:
   RATTLER_CHANNEL_NAME: "php-dist"
   GITHUB_PAGES_URL: "https://zhorton34.github.io/channels"
 
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
 jobs:
   setup-repository:
     runs-on: ubuntu-latest
@@ -87,26 +92,35 @@ jobs:
           - { os: macos-latest, target: osx-64 }
           - { os: macos-latest, target: osx-arm64 }
           - { os: windows-latest, target: win-64 }
-    
+
     runs-on: ${{ matrix.platform.os }}
-    
+
     steps:
-    - name: Set up Rattler
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          brew install libiconv
+
+      - name: Set up Rattler
         shell: bash
         run: |
           # Create temp directory for downloads
           mkdir -p ~/rattler-temp
           cd ~/rattler-temp
-          
+
           # Get latest release version
           LATEST_VERSION=$(curl -s https://api.github.com/repos/prefix-dev/rattler/releases/latest | grep -oP '"tag_name": "\K(.*)(?=")')
           if [ -z "$LATEST_VERSION" ]; then
             echo "Failed to fetch latest Rattler version"
             exit 1
           fi
-          
+
           echo "Installing Rattler version ${LATEST_VERSION}"
-          
+
           # Download and install Rattler based on platform
           case "${{ runner.os }}" in
             "Linux")
@@ -123,9 +137,9 @@ jobs:
               exit 1
               ;;
           esac
-          
+
           echo "Downloading from: ${DOWNLOAD_URL}"
-          
+
           if [ "${{ runner.os }}" == "Windows" ]; then
             curl -L -o rattler.zip "${DOWNLOAD_URL}"
             if [ $? -ne 0 ]; then
@@ -137,9 +151,9 @@ jobs:
               echo "Failed to unzip Rattler"
               exit 1
             fi
-            mkdir -p /c/Rattler
-            mv rattler.exe /c/Rattler/
-            echo "C:\Rattler" >> $GITHUB_PATH
+            mkdir -p "$env:USERPROFILE\rattler"
+            mv rattler.exe "$env:USERPROFILE\rattler\"
+            echo "$env:USERPROFILE\rattler" >> $GITHUB_PATH
           else
             curl -L "${DOWNLOAD_URL}" | tar xz
             if [ $? -ne 0 ]; then
@@ -152,14 +166,14 @@ jobs:
               exit 1
             fi
           fi
-          
+
           # Verify installation
           rattler --version
           if [ $? -ne 0 ]; then
             echo "Failed to verify Rattler installation"
             exit 1
           fi
-          
+
           # Create build environment
           rattler create -n build-env
           if [ $? -ne 0 ]; then
@@ -170,9 +184,10 @@ jobs:
       - name: Install build dependencies
         shell: bash
         run: |
-          # Add conda-forge channel
+          # Add conda-forge channel and activate environment
+          rattler activate build-env
           rattler channel add conda-forge https://conda.anaconda.org/conda-forge
-          
+
           # Install dependencies with error handling
           set -e
           rattler install -n build-env \
@@ -198,6 +213,7 @@ jobs:
             make \
             ninja \
             git
+
       - name: Generate recipe
         run: |
           cat > recipe.yaml << EOF
@@ -220,15 +236,15 @@ jobs:
 
           requirements:
             build:
-              - {{ compiler('c') }}
-              - {{ compiler('cxx') }}
+              - \${{ compiler('c') }}
+              - \${{ compiler('cxx') }}
               - autoconf  # [not win]
               - automake  # [not win]
               - libtool   # [not win]
               - make      # [not win]
               - cmake     # [win]
               - pkg-config
-              
+
             host:
               - zlib
               - openssl >=3.0
@@ -245,7 +261,7 @@ jobs:
               - libpng
               - libjpeg-turbo
               - freetype
-              
+
             run:
               - zlib
               - openssl >=3.0
@@ -266,7 +282,6 @@ jobs:
           build_scripts:
             - script: |
                 #!/bin/bash
-                # Unix build script
                 if [[ "\$(uname)" == "Darwin" ]]; then
                   EXTRA_FLAGS="--with-iconv=\$(brew --prefix libiconv)"
                   if [[ "\$(uname -m)" == "arm64" ]]; then
@@ -283,50 +298,50 @@ jobs:
                   export CFLAGS="-O2"
                   export CXXFLAGS="-O2"
                 fi
-                
-                ./configure \
-                  --prefix=\$PREFIX \
-                  --enable-shared \
-                  --enable-static \
-                  --with-config-file-path=\$PREFIX/etc/php \
-                  --with-config-file-scan-dir=\$PREFIX/etc/php/conf.d \
-                  --enable-bcmath \
-                  --enable-calendar \
-                  --enable-dba \
-                  --enable-exif \
-                  --enable-ftp \
-                  --enable-fpm \
-                  --enable-gd \
-                  --enable-intl \
-                  --enable-mbstring \
-                  --enable-pcntl \
-                  --enable-shmop \
-                  --enable-soap \
-                  --enable-sockets \
-                  --enable-sysvmsg \
-                  --enable-sysvsem \
-                  --enable-sysvshm \
-                  --with-bz2 \
-                  --with-curl \
-                  --with-ffi \
-                  --with-freetype \
-                  --with-jpeg \
-                  --with-gettext \
-                  --with-gmp \
-                  --with-mysqli \
-                  --with-openssl \
-                  --with-pdo-mysql \
-                  --with-pdo-sqlite \
-                  --with-readline \
-                  --with-sqlite3 \
-                  --with-xsl \
-                  --with-zip \
-                  --with-zlib \
+
+                ./configure \\
+                  --prefix=\$PREFIX \\
+                  --enable-shared \\
+                  --enable-static \\
+                  --with-config-file-path=\$PREFIX/etc/php \\
+                  --with-config-file-scan-dir=\$PREFIX/etc/php/conf.d \\
+                  --enable-bcmath \\
+                  --enable-calendar \\
+                  --enable-dba \\
+                  --enable-exif \\
+                  --enable-ftp \\
+                  --enable-fpm \\
+                  --enable-gd \\
+                  --enable-intl \\
+                  --enable-mbstring \\
+                  --enable-pcntl \\
+                  --enable-shmop \\
+                  --enable-soap \\
+                  --enable-sockets \\
+                  --enable-sysvmsg \\
+                  --enable-sysvsem \\
+                  --enable-sysvshm \\
+                  --with-bz2 \\
+                  --with-curl \\
+                  --with-ffi \\
+                  --with-freetype \\
+                  --with-jpeg \\
+                  --with-gettext \\
+                  --with-gmp \\
+                  --with-mysqli \\
+                  --with-openssl \\
+                  --with-pdo-mysql \\
+                  --with-pdo-sqlite \\
+                  --with-readline \\
+                  --with-sqlite3 \\
+                  --with-xsl \\
+                  --with-zip \\
+                  --with-zlib \\
                   \$EXTRA_FLAGS
-                  
+
                 make -j\$CPU_COUNT
                 make install
-                
+
                 # Install configuration files
                 mkdir -p \$PREFIX/etc/php/conf.d
                 cp php.ini-production \$PREFIX/etc/php/php.ini
@@ -359,7 +374,7 @@ jobs:
                   -DWITH_PNG=ON
                 nmake
                 nmake install
-                
+
                 mkdir %LIBRARY_PREFIX%\etc\php\conf.d
                 copy php.ini-production %LIBRARY_PREFIX%\etc\php\php.ini
               selector: win
@@ -369,7 +384,6 @@ jobs:
               - php --version
               - php -i
               - php -m
-              # Core extensions
               - php -r "if (!extension_loaded('openssl')) exit(1);"
               - php -r "if (!extension_loaded('curl')) exit(1);"
               - php -r "if (!extension_loaded('mbstring')) exit(1);"
@@ -379,19 +393,22 @@ jobs:
               - php -r "if (!extension_loaded('pdo')) exit(1);"
               - php -r "if (!extension_loaded('pdo_mysql')) exit(1);"
               - php -r "if (!extension_loaded('pdo_sqlite')) exit(1);"
-              
+
               # PHP-FPM check (Unix only)
               - if: not win
                 then: php-fpm --test
           EOF
 
       - name: Build PHP
+        shell: bash
         run: |
+          rattler activate build-env
           rattler build recipe.yaml \
             --platform ${{ matrix.platform.target }} \
             --channel conda-forge \
             --test native-and-emulated
-            
+
+
       - name: Upload package
         uses: actions/upload-artifact@v3
         with:
@@ -401,10 +418,6 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-      contents: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -416,31 +429,37 @@ jobs:
         uses: actions/download-artifact@v3
         with:
           path: artifacts
-          
+
       - name: Create channel
         run: |
           mkdir -p channel
           find artifacts -name "*.tar.bz2" -o -name "*.conda" -exec cp {} channel/ \;
-          
+
       - name: Set up Rattler for indexing
         shell: bash
         run: |
           curl -L https://github.com/prefix-dev/rattler/releases/latest/download/rattler-x86_64-unknown-linux-gnu.tar.gz | tar xz
           sudo mv rattler /usr/local/bin/
           rattler --version
-          
+
       - name: Generate channel index
         run: |
-          rattler channel index channel
-          
+          mkdir -p logs
+          rattler channel index channel 2>&1 | tee logs/indexing.log
+          if [ $? -ne 0 ]; then
+            echo "::error::Channel indexing failed - check logs/indexing.log"
+            cat logs/indexing.log
+            exit 1
+          fi
+
       - name: Setup Pages
         uses: actions/configure-pages@v4
-        
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: channel
-          
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
