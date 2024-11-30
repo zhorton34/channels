@@ -36,14 +36,13 @@ jobs:
     needs: setup-repository
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      php_versions: ${{ steps.set-matrix.outputs.php_versions }}
     steps:
-      - name: Generate build matrix
-        id: set-matrix
+      - id: set-matrix
         run: |
-          cat > versions.json << 'EOL'
+          echo "php_versions=$(cat <<'EOF' | jq -c .
           {
-            "versions": [
+            "include": [
               {
                 "version": "7.2.34",
                 "sha256": "409e11bc6a2c18707dfc44bc61c820ddfd81e17481470f3405ee7822d8379903"
@@ -74,24 +73,34 @@ jobs:
               }
             ]
           }
-          EOL
-          
-          echo "matrix=$(jq -c . versions.json)" >> $GITHUB_OUTPUT
+          EOF
+          )" >> $GITHUB_OUTPUT
 
-  generate-recipe:
+  build:
     needs: prepare
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ${{ fromJson(needs.prepare.outputs.php_versions).include }}
+        platform:
+          - { os: ubuntu-latest, target: linux-64 }
+          - { os: macos-latest, target: osx-64 }
+          - { os: macos-latest, target: osx-arm64 }
+          - { os: windows-latest, target: win-64 }
+    
+    runs-on: ${{ matrix.platform.os }}
+    
     steps:
       - name: Generate recipe
         run: |
-          cat > recipe.yaml << 'EOL'
+          cat > recipe.yaml << EOF
           package:
             name: php-dist
-            version: ${{ version }}
+            version: ${{ matrix.php.version }}
 
           source:
-            url: https://www.php.net/distributions/php-${{ version }}.tar.gz
-            sha256: ${{ sha256 }}
+            url: https://www.php.net/distributions/php-${{ matrix.php.version }}.tar.gz
+            sha256: ${{ matrix.php.sha256 }}
 
           build:
             number: 0
@@ -101,222 +110,15 @@ jobs:
               binary_relocation: true
               overlinking_behavior: ignore
               overdepending_behavior: ignore
+          EOF
 
-          requirements:
-            build:
-              - ${{ compiler('c') }}
-              - ${{ compiler('cxx') }}
-              - autoconf  # [not win]
-              - automake  # [not win]
-              - libtool   # [not win]
-              - make      # [not win]
-              - cmake     # [win]
-              - pkg-config
-              - if: linux
-                then:
-                  - ${{ cdt('xorg-x11-proto-devel') }}
-            
-            host:
-              - zlib
-              - openssl >=3.0
-              - libxml2
-              - sqlite
-              - curl
-              - libzip
-              - oniguruma
-              - readline  # [not win]
-              - libxslt
-              - icu
-              - libffi
-              - bzip2
-              - libpng
-              - libjpeg-turbo
-              - freetype
-              
-            run:
-              - zlib
-              - openssl >=3.0
-              - libxml2
-              - sqlite
-              - curl
-              - libzip
-              - oniguruma
-              - readline  # [not win]
-              - libxslt
-              - icu
-              - libffi
-              - bzip2
-              - libpng
-              - libjpeg-turbo
-              - freetype
-
-          build_scripts:
-            - script: |
-                #!/bin/bash
-                # Unix build script
-                if [[ "$(uname)" == "Darwin" ]]; then
-                  EXTRA_FLAGS="--with-iconv=$(brew --prefix libiconv)"
-                  if [[ "$(uname -m)" == "arm64" ]]; then
-                    export CFLAGS="-arch arm64 -O2"
-                    export CXXFLAGS="-arch arm64 -O2"
-                    export LDFLAGS="-arch arm64"
-                  else
-                    export CFLAGS="-arch x86_64 -O2"
-                    export CXXFLAGS="-arch x86_64 -O2"
-                    export LDFLAGS="-arch x86_64"
-                  fi
-                else
-                  EXTRA_FLAGS=""
-                  export CFLAGS="-O2"
-                  export CXXFLAGS="-O2"
-                fi
-                
-                ./configure \
-                  --prefix=$PREFIX \
-                  --enable-shared \
-                  --enable-static \
-                  --with-config-file-path=$PREFIX/etc/php \
-                  --with-config-file-scan-dir=$PREFIX/etc/php/conf.d \
-                  --enable-bcmath \
-                  --enable-calendar \
-                  --enable-dba \
-                  --enable-exif \
-                  --enable-ftp \
-                  --enable-fpm \
-                  --enable-gd \
-                  --enable-intl \
-                  --enable-mbstring \
-                  --enable-pcntl \
-                  --enable-shmop \
-                  --enable-soap \
-                  --enable-sockets \
-                  --enable-sysvmsg \
-                  --enable-sysvsem \
-                  --enable-sysvshm \
-                  --with-bz2 \
-                  --with-curl \
-                  --with-ffi \
-                  --with-freetype \
-                  --with-jpeg \
-                  --with-gettext \
-                  --with-gmp \
-                  --with-mysqli \
-                  --with-openssl \
-                  --with-pdo-mysql \
-                  --with-pdo-sqlite \
-                  --with-readline \
-                  --with-sqlite3 \
-                  --with-xsl \
-                  --with-zip \
-                  --with-zlib \
-                  $EXTRA_FLAGS
-                  
-                make -j$CPU_COUNT
-                make install
-                
-                # Install configuration files
-                mkdir -p $PREFIX/etc/php/conf.d
-                cp php.ini-production $PREFIX/etc/php/php.ini
-              selector: not win
-
-            - script: |
-                :: Windows build script
-                cmake -G "NMake Makefiles" ^
-                  -DCMAKE_INSTALL_PREFIX=%LIBRARY_PREFIX% ^
-                  -DCMAKE_BUILD_TYPE=Release ^
-                  -DENABLE_SHARED=ON ^
-                  -DENABLE_STATIC=ON ^
-                  -DWITH_CURL=ON ^
-                  -DWITH_OPENSSL=ON ^
-                  -DWITH_SQLITE3=ON ^
-                  -DWITH_MYSQLI=ON ^
-                  -DWITH_PDO=ON ^
-                  -DWITH_PDO_MYSQL=ON ^
-                  -DWITH_PDO_SQLITE=ON ^
-                  -DWITH_INTL=ON ^
-                  -DWITH_ICU_DIR=%LIBRARY_PREFIX% ^
-                  -DWITH_LIBXML=ON ^
-                  -DWITH_XSL=ON ^
-                  -DWITH_ZLIB=ON ^
-                  -DWITH_ZIP=ON ^
-                  -DWITH_FFI=ON ^
-                  -DWITH_GD=ON ^
-                  -DWITH_FREETYPE=ON ^
-                  -DWITH_JPEG=ON ^
-                  -DWITH_PNG=ON
-                nmake
-                nmake install
-                
-                mkdir %LIBRARY_PREFIX%\etc\php\conf.d
-                copy php.ini-production %LIBRARY_PREFIX%\etc\php\php.ini
-              selector: win
-
-          test:
-            commands:
-              - php --version
-              - php -i
-              - php -m
-              # Core extensions
-              - php -r "if (!extension_loaded('openssl')) exit(1);"
-              - php -r "if (!extension_loaded('curl')) exit(1);"
-              - php -r "if (!extension_loaded('mbstring')) exit(1);"
-              - php -r "if (!extension_loaded('intl')) exit(1);"
-              - php -r "if (!extension_loaded('gd')) exit(1);"
-              - php -r "if (!extension_loaded('mysqli')) exit(1);"
-              - php -r "if (!extension_loaded('pdo')) exit(1);"
-              - php -r "if (!extension_loaded('pdo_mysql')) exit(1);"
-              - php -r "if (!extension_loaded('pdo_sqlite')) exit(1);"
-              
-              # PHP-FPM check (Unix only)
-              - if: not win
-                then: php-fpm --test
-
-          about:
-            home: https://www.php.net/
-            license: PHP-3.01
-            license_file: LICENSE
-            summary: PHP distribution built with Rattler
-            description: |
-              Cross-platform PHP builds optimized for different architectures:
-              - Linux x86_64
-              - macOS Intel (x86_64)
-              - macOS Apple Silicon (arm64)
-              - Windows x86_64
-              
-              Built with comprehensive extension support and optimized for production use.
-          EOL
-          
-      - uses: actions/upload-artifact@v3
-        with:
-          name: build-configs
-          path: recipe.yaml
-
-  build:
-    needs: [prepare, generate-recipe]
-    strategy:
-      fail-fast: false
-      matrix:
-        version: ${{ fromJson(needs.prepare.outputs.matrix).versions }}
-        platform:
-          - { os: ubuntu-latest, target: linux-64 }
-          - { os: macos-latest, target: osx-64 }
-          - { os: macos-latest, target: osx-arm64 }
-          - { os: windows-latest, target: win-64 }
-        
-    runs-on: ${{ matrix.platform.os }}
-    
-    steps:
-      - name: Download build configs
-        uses: actions/download-artifact@v3
-        with:
-          name: build-configs
-          
       - name: Set up Rattler
         uses: prefix-dev/setup-rattler@v0.1.0
         with:
           environment-name: build-env
-          
+
       - name: Install build dependencies
+        shell: bash
         run: |
           rattler install -n build-env \
             compilers \
@@ -339,17 +141,9 @@ jobs:
             libjpeg-turbo \
             freetype
 
-      - name: Generate recipe
-        run: |
-          VERSION="${{ matrix.version.version }}"
-          SHA256="${{ matrix.version.sha256 }}"
-          
-          sed "s/{{ version }}/$VERSION/g; s/{{ sha256 }}/$SHA256/g" \
-            recipe.yaml > final_recipe.yaml
-            
       - name: Build PHP
         run: |
-          rattler build final_recipe.yaml \
+          rattler build recipe.yaml \
             --platform ${{ matrix.platform.target }} \
             --channel conda-forge \
             --test native-and-emulated
@@ -357,7 +151,7 @@ jobs:
       - name: Upload package
         uses: actions/upload-artifact@v3
         with:
-          name: php-${{ matrix.version.version }}-${{ matrix.platform.target }}
+          name: php-${{ matrix.php.version }}-${{ matrix.platform.target }}
           path: dist/
 
   publish:
@@ -366,10 +160,14 @@ jobs:
     permissions:
       pages: write
       id-token: write
+      contents: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v3
         with:
@@ -377,17 +175,8 @@ jobs:
           
       - name: Create channel
         run: |
-          # Create channel directory
           mkdir -p channel
-          
-          # Copy all built packages
           find artifacts -name "*.tar.bz2" -o -name "*.conda" -exec cp {} channel/ \;
-          
-      - name: Generate channel index
-        run: |
-          # Install rattler for indexing
-          curl -L https://github.com/prefix-dev/rattler/releases/latest/download/rattler-x86_64-unknown-linux-gnu.tar.gz | tar xz
-          ./rattler channel index channel
           
       - name: Setup Pages
         uses: actions/configure-pages@v4
@@ -403,7 +192,7 @@ jobs:
 
       - name: Generate Channel Info
         run: |
-          cat > README.md << 'EOL'
+          cat > README.md << 'EOF'
           # PHP Rattler Channel
 
           Pre-built PHP packages for multiple platforms using Rattler.
@@ -422,7 +211,6 @@ jobs:
           ```
 
           ## Available Versions
-
           $(ls channel/*/*.json | grep -o "php-[0-9.]*" | sort -u | sed 's/^/- /')
 
           ## Platforms
@@ -437,7 +225,7 @@ jobs:
           - PHP-FPM support (Unix)
           - Optimized builds
           - Weekly updates
-          EOL
+          EOF
 
       - name: Commit README
         uses: EndBug/add-and-commit@v9
