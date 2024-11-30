@@ -1,0 +1,447 @@
+name: Build and Publish PHP Packages
+
+on:
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly builds
+  workflow_dispatch:
+
+env:
+  RATTLER_CHANNEL_NAME: "php-dist"
+  GITHUB_PAGES_URL: "https://zhorton34.github.io/channels"
+
+jobs:
+  setup-repository:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Setup GitHub Pages branch
+        run: |
+          # Create and setup gh-pages branch if it doesn't exist
+          if ! git ls-remote --heads origin gh-pages; then
+            git checkout --orphan gh-pages
+            git rm -rf .
+            echo "# PHP Distributions Channel" > README.md
+            git add README.md
+            git config --global user.email "github-actions[bot]@users.noreply.github.com"
+            git config --global user.name "github-actions[bot]"
+            git commit -m "Initial gh-pages commit"
+            git push origin gh-pages
+          fi
+
+  prepare:
+    needs: setup-repository
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Generate build matrix
+        id: set-matrix
+        run: |
+          cat > versions.json << 'EOL'
+          {
+            "versions": [
+              {
+                "version": "7.2.34",
+                "sha256": "409e11bc6a2c18707dfc44bc61c820ddfd81e17481470f3405ee7822d8379903"
+              },
+              {
+                "version": "7.3.33",
+                "sha256": "166eacf9095025ee7726b95539473002d9b056a2900c7c8eb532377cf8ac5144"
+              },
+              {
+                "version": "7.4.33",
+                "sha256": "924846abf93bc613815c55dd3f5809377813ac62a9ec4eb3778675c3f8888845"
+              },
+              {
+                "version": "8.0.30",
+                "sha256": "1461f6c4670078ee2d2d859fd0addd15ed3f43382de13905eece1a33dc5eaa45"
+              },
+              {
+                "version": "8.1.27",
+                "sha256": "d19ae6d1d1ba2d36fbd196d30aeb84acd8d50ee4f3ba235fc3286d86eb82711e"
+              },
+              {
+                "version": "8.2.17",
+                "sha256": "b13469e1f706e3a2e728dedae46b5a33592c57fb6212638de1964c695a367529"
+              },
+              {
+                "version": "8.3.4",
+                "sha256": "25755fa03370420f3094efb296dda1f7eda61fbc3a95624dca8481282fcc88fc"
+              }
+            ]
+          }
+          EOL
+          
+          echo "matrix=$(jq -c . versions.json)" >> $GITHUB_OUTPUT
+
+  generate-recipe:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate recipe
+        run: |
+          cat > recipe.yaml << 'EOL'
+          package:
+            name: php-dist
+            version: ${{ version }}
+
+          source:
+            url: https://www.php.net/distributions/php-${{ version }}.tar.gz
+            sha256: ${{ sha256 }}
+
+          build:
+            number: 0
+            dynamic_linking:
+              rpaths:
+                - lib/
+              binary_relocation: true
+              overlinking_behavior: ignore
+              overdepending_behavior: ignore
+
+          requirements:
+            build:
+              - ${{ compiler('c') }}
+              - ${{ compiler('cxx') }}
+              - autoconf  # [not win]
+              - automake  # [not win]
+              - libtool   # [not win]
+              - make      # [not win]
+              - cmake     # [win]
+              - pkg-config
+              - if: linux
+                then:
+                  - ${{ cdt('xorg-x11-proto-devel') }}
+            
+            host:
+              - zlib
+              - openssl >=3.0
+              - libxml2
+              - sqlite
+              - curl
+              - libzip
+              - oniguruma
+              - readline  # [not win]
+              - libxslt
+              - icu
+              - libffi
+              - bzip2
+              - libpng
+              - libjpeg-turbo
+              - freetype
+              
+            run:
+              - zlib
+              - openssl >=3.0
+              - libxml2
+              - sqlite
+              - curl
+              - libzip
+              - oniguruma
+              - readline  # [not win]
+              - libxslt
+              - icu
+              - libffi
+              - bzip2
+              - libpng
+              - libjpeg-turbo
+              - freetype
+
+          build_scripts:
+            - script: |
+                #!/bin/bash
+                # Unix build script
+                if [[ "$(uname)" == "Darwin" ]]; then
+                  EXTRA_FLAGS="--with-iconv=$(brew --prefix libiconv)"
+                  if [[ "$(uname -m)" == "arm64" ]]; then
+                    export CFLAGS="-arch arm64 -O2"
+                    export CXXFLAGS="-arch arm64 -O2"
+                    export LDFLAGS="-arch arm64"
+                  else
+                    export CFLAGS="-arch x86_64 -O2"
+                    export CXXFLAGS="-arch x86_64 -O2"
+                    export LDFLAGS="-arch x86_64"
+                  fi
+                else
+                  EXTRA_FLAGS=""
+                  export CFLAGS="-O2"
+                  export CXXFLAGS="-O2"
+                fi
+                
+                ./configure \
+                  --prefix=$PREFIX \
+                  --enable-shared \
+                  --enable-static \
+                  --with-config-file-path=$PREFIX/etc/php \
+                  --with-config-file-scan-dir=$PREFIX/etc/php/conf.d \
+                  --enable-bcmath \
+                  --enable-calendar \
+                  --enable-dba \
+                  --enable-exif \
+                  --enable-ftp \
+                  --enable-fpm \
+                  --enable-gd \
+                  --enable-intl \
+                  --enable-mbstring \
+                  --enable-pcntl \
+                  --enable-shmop \
+                  --enable-soap \
+                  --enable-sockets \
+                  --enable-sysvmsg \
+                  --enable-sysvsem \
+                  --enable-sysvshm \
+                  --with-bz2 \
+                  --with-curl \
+                  --with-ffi \
+                  --with-freetype \
+                  --with-jpeg \
+                  --with-gettext \
+                  --with-gmp \
+                  --with-mysqli \
+                  --with-openssl \
+                  --with-pdo-mysql \
+                  --with-pdo-sqlite \
+                  --with-readline \
+                  --with-sqlite3 \
+                  --with-xsl \
+                  --with-zip \
+                  --with-zlib \
+                  $EXTRA_FLAGS
+                  
+                make -j$CPU_COUNT
+                make install
+                
+                # Install configuration files
+                mkdir -p $PREFIX/etc/php/conf.d
+                cp php.ini-production $PREFIX/etc/php/php.ini
+              selector: not win
+
+            - script: |
+                :: Windows build script
+                cmake -G "NMake Makefiles" ^
+                  -DCMAKE_INSTALL_PREFIX=%LIBRARY_PREFIX% ^
+                  -DCMAKE_BUILD_TYPE=Release ^
+                  -DENABLE_SHARED=ON ^
+                  -DENABLE_STATIC=ON ^
+                  -DWITH_CURL=ON ^
+                  -DWITH_OPENSSL=ON ^
+                  -DWITH_SQLITE3=ON ^
+                  -DWITH_MYSQLI=ON ^
+                  -DWITH_PDO=ON ^
+                  -DWITH_PDO_MYSQL=ON ^
+                  -DWITH_PDO_SQLITE=ON ^
+                  -DWITH_INTL=ON ^
+                  -DWITH_ICU_DIR=%LIBRARY_PREFIX% ^
+                  -DWITH_LIBXML=ON ^
+                  -DWITH_XSL=ON ^
+                  -DWITH_ZLIB=ON ^
+                  -DWITH_ZIP=ON ^
+                  -DWITH_FFI=ON ^
+                  -DWITH_GD=ON ^
+                  -DWITH_FREETYPE=ON ^
+                  -DWITH_JPEG=ON ^
+                  -DWITH_PNG=ON
+                nmake
+                nmake install
+                
+                mkdir %LIBRARY_PREFIX%\etc\php\conf.d
+                copy php.ini-production %LIBRARY_PREFIX%\etc\php\php.ini
+              selector: win
+
+          test:
+            commands:
+              - php --version
+              - php -i
+              - php -m
+              # Core extensions
+              - php -r "if (!extension_loaded('openssl')) exit(1);"
+              - php -r "if (!extension_loaded('curl')) exit(1);"
+              - php -r "if (!extension_loaded('mbstring')) exit(1);"
+              - php -r "if (!extension_loaded('intl')) exit(1);"
+              - php -r "if (!extension_loaded('gd')) exit(1);"
+              - php -r "if (!extension_loaded('mysqli')) exit(1);"
+              - php -r "if (!extension_loaded('pdo')) exit(1);"
+              - php -r "if (!extension_loaded('pdo_mysql')) exit(1);"
+              - php -r "if (!extension_loaded('pdo_sqlite')) exit(1);"
+              
+              # PHP-FPM check (Unix only)
+              - if: not win
+                then: php-fpm --test
+
+          about:
+            home: https://www.php.net/
+            license: PHP-3.01
+            license_file: LICENSE
+            summary: PHP distribution built with Rattler
+            description: |
+              Cross-platform PHP builds optimized for different architectures:
+              - Linux x86_64
+              - macOS Intel (x86_64)
+              - macOS Apple Silicon (arm64)
+              - Windows x86_64
+              
+              Built with comprehensive extension support and optimized for production use.
+          EOL
+          
+      - uses: actions/upload-artifact@v3
+        with:
+          name: build-configs
+          path: recipe.yaml
+
+  build:
+    needs: [prepare, generate-recipe]
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJson(needs.prepare.outputs.matrix).versions }}
+        platform:
+          - { os: ubuntu-latest, target: linux-64 }
+          - { os: macos-latest, target: osx-64 }
+          - { os: macos-latest, target: osx-arm64 }
+          - { os: windows-latest, target: win-64 }
+        
+    runs-on: ${{ matrix.platform.os }}
+    
+    steps:
+      - name: Download build configs
+        uses: actions/download-artifact@v3
+        with:
+          name: build-configs
+          
+      - name: Set up Rattler
+        uses: prefix-dev/setup-rattler@v0.1.0
+        with:
+          environment-name: build-env
+          
+      - name: Install build dependencies
+        run: |
+          rattler install -n build-env \
+            compilers \
+            automake \
+            cmake \
+            pkg-config \
+            openssl \
+            zlib \
+            libxml2 \
+            sqlite \
+            curl \
+            libzip \
+            oniguruma \
+            readline \
+            libxslt \
+            icu \
+            libffi \
+            bzip2 \
+            libpng \
+            libjpeg-turbo \
+            freetype
+
+      - name: Generate recipe
+        run: |
+          VERSION="${{ matrix.version.version }}"
+          SHA256="${{ matrix.version.sha256 }}"
+          
+          sed "s/{{ version }}/$VERSION/g; s/{{ sha256 }}/$SHA256/g" \
+            recipe.yaml > final_recipe.yaml
+            
+      - name: Build PHP
+        run: |
+          rattler build final_recipe.yaml \
+            --platform ${{ matrix.platform.target }} \
+            --channel conda-forge \
+            --test native-and-emulated
+            
+      - name: Upload package
+        uses: actions/upload-artifact@v3
+        with:
+          name: php-${{ matrix.version.version }}-${{ matrix.platform.target }}
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+          
+      - name: Create channel
+        run: |
+          # Create channel directory
+          mkdir -p channel
+          
+          # Copy all built packages
+          find artifacts -name "*.tar.bz2" -o -name "*.conda" -exec cp {} channel/ \;
+          
+      - name: Generate channel index
+        run: |
+          # Install rattler for indexing
+          curl -L https://github.com/prefix-dev/rattler/releases/latest/download/rattler-x86_64-unknown-linux-gnu.tar.gz | tar xz
+          ./rattler channel index channel
+          
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+        
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: channel
+          
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Generate Channel Info
+        run: |
+          cat > README.md << 'EOL'
+          # PHP Rattler Channel
+
+          Pre-built PHP packages for multiple platforms using Rattler.
+
+          ## Installation
+
+          ```bash
+          # Add the channel
+          rattler channel add php-dist https://zhorton34.github.io/channels
+
+          # Install latest version
+          rattler install php-dist::php
+
+          # Install specific version
+          rattler install php-dist::php=8.2
+          ```
+
+          ## Available Versions
+
+          $(ls channel/*/*.json | grep -o "php-[0-9.]*" | sort -u | sed 's/^/- /')
+
+          ## Platforms
+          - Linux (x86_64)
+          - macOS Intel (x86_64)
+          - macOS Apple Silicon (arm64)
+          - Windows (x86_64)
+
+          ## Features
+          - OpenSSL 3.0+ support
+          - Comprehensive extension support
+          - PHP-FPM support (Unix)
+          - Optimized builds
+          - Weekly updates
+          EOL
+
+      - name: Commit README
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: 'README.md'
+          message: 'docs: update available versions [skip ci]'
+          branch: main
