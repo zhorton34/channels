@@ -1,0 +1,135 @@
+# PHP Distribution Channel Builder
+
+## Project Context
+This repository builds and distributes PHP packages for multiple platforms and versions using Rattler. 
+The packages are distributed through GitHub Pages acting as a Rattler/Conda channel.
+
+## Key Technical Details
+- Build System: Rattler Build
+- Package Format: Conda/Rattler compatible (.conda and .tar.bz2)
+- Platforms: linux-64, osx-64, osx-arm64, win-64
+- PHP Versions: 7.2 through 8.3
+- Distribution: GitHub Pages channel
+- Build Schedule: Weekly automated builds
+
+## Code Organization
+- `.github/workflows/`: Contains GitHub Actions workflow files
+- `channel/`: Built packages and channel metadata
+- `README.md`: Installation and usage documentation
+
+## Critical Considerations
+
+### Build Process
+- Each PHP version must be built separately for each platform
+- Build configurations must be platform-specific
+- Dependencies must be correctly specified for each platform
+- PHP extensions must be consistently enabled across platforms
+- Build artifacts must be properly named and organized
+
+### Package Naming
+- Follow format: php-dist-{version}-{build_number}
+- Version numbers must match PHP release versions exactly
+- Build numbers increment for same-version rebuilds
+
+### Dependencies
+- OpenSSL >=3.0 is required
+- Platform-specific dependencies must be handled:
+  - Windows: MSVC, cmake, etc.
+  - Unix: autotools, make, etc.
+  - macOS: Additional flags for arm64
+
+### Common Pitfalls
+- Avoid hardcoding paths
+- Don't mix Unix/Windows path separators
+- Ensure proper handling of PHP configuration files
+- Maintain consistent extension sets across platforms
+- Handle PHP-FPM correctly on Unix platforms
+- Properly manage OpenSSL version requirements
+
+### Security Considerations
+- Verify source checksums
+- Use proper GitHub token permissions
+- Avoid exposing sensitive build information
+- Maintain proper file permissions
+
+### Testing Requirements
+- Verify PHP binary functionality
+- Test core extensions
+- Validate configuration files
+- Check extension loading
+- Verify FPM functionality on Unix
+
+## Build Flags
+Important PHP compile flags:
+```text
+--enable-shared
+--enable-static
+--with-config-file-path
+--enable-fpm (Unix only)
+--with-openssl
+--enable-bcmath
+--enable-mbstring
+--enable-opcache
+```
+
+## Package Requirements
+Each package must include:
+- PHP binary
+- Core extensions
+- Configuration files
+- License information
+- Extension configuration directory
+- PHP-FPM binary (Unix)
+
+## Language Server Hints
+- Treat .yaml files as GitHub Actions workflows
+- Treat .sh files as bash scripts
+- Treat .bat files as Windows batch scripts
+- PHP source files follow PHP standard
+
+## Code Style
+- YAML: 2-space indentation
+- Bash: Use POSIX-compatible syntax
+- Windows: Use standard batch syntax
+- PHP Config: Follow php.ini standards
+
+## Important Paths
+- PHP configs: $PREFIX/etc/php/
+- Extensions: $PREFIX/lib/php/extensions/
+- FPM configs: $PREFIX/etc/php-fpm.d/
+- Binaries: $PREFIX/bin/ ($PREFIX/Scripts on Windows)
+
+## Key Variables
+```yaml
+PREFIX: Installation directory
+CPU_COUNT: Number of build cores
+PKG_VERSION: PHP version being built
+BUILD_NUMBER: Current build number
+SHLIB_EXT: Platform shared library extension
+```
+
+## Testing Priorities
+1. Binary execution
+2. Extension loading
+3. Configuration parsing
+4. FPM functionality (Unix)
+5. Database connections
+6. OpenSSL functionality
+7. Character encoding
+
+## Common Operations
+```bash
+# Build command structure
+rattler build recipe.yaml --platform {platform} --channel conda-forge
+
+# Test command structure
+rattler test --package-file {package} --channel conda-forge
+
+# Channel indexing
+rattler channel index channel/
+```
+
+## Documentation Links
+- PHP Build Docs: https://www.php.net/internals/build-system
+- Rattler Build Docs: https://prefix-dev.github.io/rattler-build/latest/
+- GitHub Pages Docs: https://docs.github.com/en/pages
