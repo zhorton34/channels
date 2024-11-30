@@ -91,35 +91,43 @@ jobs:
     runs-on: ${{ matrix.platform.os }}
     
     steps:
-      - name: Generate recipe
-        run: |
-          cat > recipe.yaml << EOF
-          package:
-            name: php-dist
-            version: ${{ matrix.php.version }}
-
-          source:
-            url: https://www.php.net/distributions/php-${{ matrix.php.version }}.tar.gz
-            sha256: ${{ matrix.php.sha256 }}
-
-          build:
-            number: 0
-            dynamic_linking:
-              rpaths:
-                - lib/
-              binary_relocation: true
-              overlinking_behavior: ignore
-              overdepending_behavior: ignore
-          EOF
-
       - name: Set up Rattler
-        uses: prefix-dev/setup-rattler@v0.1.0
-        with:
-          environment-name: build-env
+        shell: bash
+        run: |
+          # Create temp directory for downloads
+          mkdir -p ~/rattler-temp
+          cd ~/rattler-temp
+          
+          # Download and install Rattler based on platform
+          case "${{ runner.os }}" in
+            "Linux")
+              curl -L https://github.com/prefix-dev/rattler/releases/latest/download/rattler-x86_64-unknown-linux-gnu.tar.gz | tar xz
+              sudo mv rattler /usr/local/bin/
+              ;;
+            "macOS")
+              curl -L https://github.com/prefix-dev/rattler/releases/latest/download/rattler-x86_64-apple-darwin.tar.gz | tar xz
+              sudo mv rattler /usr/local/bin/
+              ;;
+            "Windows")
+              curl -L https://github.com/prefix-dev/rattler/releases/latest/download/rattler-x86_64-pc-windows-msvc.zip -o rattler.zip
+              unzip rattler.zip
+              mv rattler.exe /c/Windows/System32/
+              ;;
+          esac
+          
+          # Verify installation
+          rattler --version
+          
+          # Create build environment
+          rattler create -n build-env
 
       - name: Install build dependencies
         shell: bash
         run: |
+          # Add conda-forge channel
+          rattler channel add conda-forge https://conda.anaconda.org/conda-forge
+          
+          # Install dependencies
           rattler install -n build-env \
             compilers \
             automake \
@@ -139,7 +147,197 @@ jobs:
             bzip2 \
             libpng \
             libjpeg-turbo \
-            freetype
+            freetype \
+            make \
+            ninja \
+            git
+
+      - name: Generate recipe
+        run: |
+          cat > recipe.yaml << EOF
+          package:
+            name: php-dist
+            version: ${{ matrix.php.version }}
+
+          source:
+            url: https://www.php.net/distributions/php-${{ matrix.php.version }}.tar.gz
+            sha256: ${{ matrix.php.sha256 }}
+
+          build:
+            number: 0
+            dynamic_linking:
+              rpaths:
+                - lib/
+              binary_relocation: true
+              overlinking_behavior: ignore
+              overdepending_behavior: ignore
+
+          requirements:
+            build:
+              - {{ compiler('c') }}
+              - {{ compiler('cxx') }}
+              - autoconf  # [not win]
+              - automake  # [not win]
+              - libtool   # [not win]
+              - make      # [not win]
+              - cmake     # [win]
+              - pkg-config
+              
+            host:
+              - zlib
+              - openssl >=3.0
+              - libxml2
+              - sqlite
+              - curl
+              - libzip
+              - oniguruma
+              - readline  # [not win]
+              - libxslt
+              - icu
+              - libffi
+              - bzip2
+              - libpng
+              - libjpeg-turbo
+              - freetype
+              
+            run:
+              - zlib
+              - openssl >=3.0
+              - libxml2
+              - sqlite
+              - curl
+              - libzip
+              - oniguruma
+              - readline  # [not win]
+              - libxslt
+              - icu
+              - libffi
+              - bzip2
+              - libpng
+              - libjpeg-turbo
+              - freetype
+
+          build_scripts:
+            - script: |
+                #!/bin/bash
+                # Unix build script
+                if [[ "\$(uname)" == "Darwin" ]]; then
+                  EXTRA_FLAGS="--with-iconv=\$(brew --prefix libiconv)"
+                  if [[ "\$(uname -m)" == "arm64" ]]; then
+                    export CFLAGS="-arch arm64 -O2"
+                    export CXXFLAGS="-arch arm64 -O2"
+                    export LDFLAGS="-arch arm64"
+                  else
+                    export CFLAGS="-arch x86_64 -O2"
+                    export CXXFLAGS="-arch x86_64 -O2"
+                    export LDFLAGS="-arch x86_64"
+                  fi
+                else
+                  EXTRA_FLAGS=""
+                  export CFLAGS="-O2"
+                  export CXXFLAGS="-O2"
+                fi
+                
+                ./configure \
+                  --prefix=\$PREFIX \
+                  --enable-shared \
+                  --enable-static \
+                  --with-config-file-path=\$PREFIX/etc/php \
+                  --with-config-file-scan-dir=\$PREFIX/etc/php/conf.d \
+                  --enable-bcmath \
+                  --enable-calendar \
+                  --enable-dba \
+                  --enable-exif \
+                  --enable-ftp \
+                  --enable-fpm \
+                  --enable-gd \
+                  --enable-intl \
+                  --enable-mbstring \
+                  --enable-pcntl \
+                  --enable-shmop \
+                  --enable-soap \
+                  --enable-sockets \
+                  --enable-sysvmsg \
+                  --enable-sysvsem \
+                  --enable-sysvshm \
+                  --with-bz2 \
+                  --with-curl \
+                  --with-ffi \
+                  --with-freetype \
+                  --with-jpeg \
+                  --with-gettext \
+                  --with-gmp \
+                  --with-mysqli \
+                  --with-openssl \
+                  --with-pdo-mysql \
+                  --with-pdo-sqlite \
+                  --with-readline \
+                  --with-sqlite3 \
+                  --with-xsl \
+                  --with-zip \
+                  --with-zlib \
+                  \$EXTRA_FLAGS
+                  
+                make -j\$CPU_COUNT
+                make install
+                
+                # Install configuration files
+                mkdir -p \$PREFIX/etc/php/conf.d
+                cp php.ini-production \$PREFIX/etc/php/php.ini
+              selector: not win
+
+            - script: |
+                :: Windows build script
+                cmake -G "NMake Makefiles" ^
+                  -DCMAKE_INSTALL_PREFIX=%LIBRARY_PREFIX% ^
+                  -DCMAKE_BUILD_TYPE=Release ^
+                  -DENABLE_SHARED=ON ^
+                  -DENABLE_STATIC=ON ^
+                  -DWITH_CURL=ON ^
+                  -DWITH_OPENSSL=ON ^
+                  -DWITH_SQLITE3=ON ^
+                  -DWITH_MYSQLI=ON ^
+                  -DWITH_PDO=ON ^
+                  -DWITH_PDO_MYSQL=ON ^
+                  -DWITH_PDO_SQLITE=ON ^
+                  -DWITH_INTL=ON ^
+                  -DWITH_ICU_DIR=%LIBRARY_PREFIX% ^
+                  -DWITH_LIBXML=ON ^
+                  -DWITH_XSL=ON ^
+                  -DWITH_ZLIB=ON ^
+                  -DWITH_ZIP=ON ^
+                  -DWITH_FFI=ON ^
+                  -DWITH_GD=ON ^
+                  -DWITH_FREETYPE=ON ^
+                  -DWITH_JPEG=ON ^
+                  -DWITH_PNG=ON
+                nmake
+                nmake install
+                
+                mkdir %LIBRARY_PREFIX%\etc\php\conf.d
+                copy php.ini-production %LIBRARY_PREFIX%\etc\php\php.ini
+              selector: win
+
+          test:
+            commands:
+              - php --version
+              - php -i
+              - php -m
+              # Core extensions
+              - php -r "if (!extension_loaded('openssl')) exit(1);"
+              - php -r "if (!extension_loaded('curl')) exit(1);"
+              - php -r "if (!extension_loaded('mbstring')) exit(1);"
+              - php -r "if (!extension_loaded('intl')) exit(1);"
+              - php -r "if (!extension_loaded('gd')) exit(1);"
+              - php -r "if (!extension_loaded('mysqli')) exit(1);"
+              - php -r "if (!extension_loaded('pdo')) exit(1);"
+              - php -r "if (!extension_loaded('pdo_mysql')) exit(1);"
+              - php -r "if (!extension_loaded('pdo_sqlite')) exit(1);"
+              
+              # PHP-FPM check (Unix only)
+              - if: not win
+                then: php-fpm --test
+          EOF
 
       - name: Build PHP
         run: |
@@ -177,6 +375,17 @@ jobs:
         run: |
           mkdir -p channel
           find artifacts -name "*.tar.bz2" -o -name "*.conda" -exec cp {} channel/ \;
+          
+      - name: Set up Rattler for indexing
+        shell: bash
+        run: |
+          curl -L https://github.com/prefix-dev/rattler/releases/latest/download/rattler-x86_64-unknown-linux-gnu.tar.gz | tar xz
+          sudo mv rattler /usr/local/bin/
+          rattler --version
+          
+      - name: Generate channel index
+        run: |
+          rattler channel index channel
           
       - name: Setup Pages
         uses: actions/configure-pages@v4
