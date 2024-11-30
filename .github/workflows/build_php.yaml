@@ -397,7 +397,7 @@ jobs:
               # PHP-FPM check (Unix only)
               - if: not win
                 then: php-fpm --test
-          EOF
+
 
       - name: Build PHP
         shell: bash
@@ -407,7 +407,6 @@ jobs:
             --platform ${{ matrix.platform.target }} \
             --channel conda-forge \
             --test native-and-emulated
-
 
       - name: Upload package
         uses: actions/upload-artifact@v3
